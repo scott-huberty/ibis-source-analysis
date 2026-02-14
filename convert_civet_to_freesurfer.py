@@ -59,13 +59,6 @@ def parse_args() -> argparse.Namespace:
         default="327680",
         help="Resolution token in CIVET filenames (e.g., 327680 or 81920).",
     )
-    parser.add_argument(
-        "--ext",
-        type=str,
-        default="vtk",
-        choices=("vtk", "obj"),
-        help="Input surface extension to search for.",
-    )
     # args for freesurfer output folders
     parser.add_argument(
         "--subjects-dir",
@@ -190,19 +183,16 @@ def find_surface_file(
     civet_dir: Path,
     spec: SurfaceSpec,
     resolution: str,
-    ext: str,
 ) -> Path:
-    pattern = f"*_{spec.civet_surface}_surface*_rsl_{spec.hemisphere}_{resolution}*.{ext}"
+    pattern = f"*_{spec.civet_surface}_surface*_rsl_{spec.hemisphere}_{resolution}*.vtk"
     matches = sorted(civet_dir.rglob(pattern))
     if not matches:
         raise FileNotFoundError(
             f"Missing CIVET file for surface={spec.civet_surface}, "
-            f"hemi={spec.hemisphere}, resolution={resolution}, ext={ext}, "
+            f"hemi={spec.hemisphere}, resolution={resolution}, ext=vtk, "
             f"pattern={pattern}"
         )
-    # Prefer native ITK-space exports when available.
-    preferred = [m for m in matches if "native_itkSpace" in m.stem]
-    return preferred[0] if preferred else matches[0]
+    return matches[0]
 
 
 def get_subject_session_from_nrrd_fname(nrrd_path):
@@ -251,7 +241,7 @@ def main() -> int:
     # Convert Surfaces
     mapping: list[tuple[SurfaceSpec, Path, Path]] = []
     for spec in SURFACE_SPECS:
-        input_path = find_surface_file(args.civet_dir, spec, args.resolution, args.ext)
+        input_path = find_surface_file(args.civet_dir, spec, args.resolution)
         output_path = surf_dir / f"{spec.fs_hemi}.{spec.fs_surface}"
         mapping.append((spec, input_path, output_path))
 
