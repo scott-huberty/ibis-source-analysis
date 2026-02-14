@@ -14,6 +14,7 @@ from pathlib import Path
 import nibabel as nib
 import numpy as np
 import nrrd
+from nibabel.freesurfer.io import read_geometry, write_geometry
 
 
 @dataclass(frozen=True)
@@ -162,6 +163,23 @@ def run_mris_convert(input_path: Path, output_path: Path, dry_run: bool) -> None
         subprocess.run(cmd, check=True)
 
 
+def _surface_to_tkr_transform(t1_path: Path) -> np.ndarray:
+    img = nib.load(str(t1_path))
+    affine = img.header.get_vox2ras() @ np.linalg.inv(img.header.get_vox2ras_tkr())
+    return np.linalg.inv(affine)
+
+
+def apply_t1_tkr_alignment(surface_path: Path, t1_path: Path, dry_run: bool) -> None:
+    if dry_run:
+        print(f"apply_t1_tkr_alignment {surface_path} using {t1_path}")
+        return
+    transform = _surface_to_tkr_transform(t1_path)
+    vertices, faces = read_geometry(str(surface_path))
+    vertices_h = np.hstack([vertices, np.ones((vertices.shape[0], 1))])
+    vertices_aligned = (transform @ vertices_h.T).T[:, :3]
+    write_geometry(str(surface_path), vertices_aligned, faces)
+
+
 def build_t1_from_nrrd(
     t1_nrrd_path: Path,
     fs_subject_dir: Path,
@@ -273,6 +291,7 @@ def main() -> int:
     subject, session = get_subject_session_from_nrrd_fname(args.t1_nrrd)
     fs_subject_dir = args.subjects_dir / f"sub-{subject}_ses-{session}"
     surf_dir = fs_subject_dir / "surf"
+    t1_path = fs_subject_dir / "mri" / "T1.mgz"
 
     # Convert Volume
     if not args.t1_nrrd.exists():
@@ -308,11 +327,12 @@ def main() -> int:
             print(f"Skipping existing: {output_path}")
             continue
         run_mris_convert(input_path, output_path, dry_run=args.dry_run)
+        apply_t1_tkr_alignment(output_path, t1_path=t1_path, dry_run=args.dry_run)
 
     print("\nNext step for BEM surfaces (watershed):")
     print(
         "mne watershed_bem "
-        f"--subject {subject} "
+        f"--subject sub-{subject}_ses-{session} "
         f"--subjects-dir {args.subjects_dir} "
         "--overwrite"
     )
