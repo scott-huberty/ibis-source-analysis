@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import shutil
 import subprocess
-import signal
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -93,74 +92,23 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run_command(command, dry_run=False):
-    print("------------------ RUNNING A COMMAND IN BASH ------------------")
-    print(command)
-    print("-------------------------- OUTPUT -----------------------------")
-    if not dry_run:
-        bash(command.replace("\\", "").split())
-    print("------------------------ END OUTPUT ---------------------------\n")
+def run_cmd(cmd: list[str], dry_run: bool = False) -> None:
+    print(" ".join(cmd))
+    if dry_run:
+        return
+    result = subprocess.run(cmd, check=True, text=True, capture_output=True)
+    if result.stdout:
+        print(result.stdout, end="")
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
 
 
 def run_mri_convert(input_path: Path, output_path: Path, extra_args: list[str], dry_run: bool) -> None:
-    cmd = ["mri_convert", *extra_args, str(input_path), str(output_path)]
-    print(" ".join(cmd))
-    if not dry_run:
-        subprocess.run(cmd, check=True)
-
-
-def bash(cmd, print_stdout=True, print_stderr=True):
-    sp = subprocess
-    proc = sp.Popen(cmd, stderr=sp.PIPE, stdout=sp.PIPE)
-    # , shell=True, universal_newlines=True,
-    # executable='/bin/bash')
-
-    all_stdout = []
-    all_stderr = []
-    while proc.poll() is None:
-        for stdout_line in proc.stdout:
-            if stdout_line != '':
-                if print_stdout:
-                    print(stdout_line.decode(), end='')
-                all_stdout.append(stdout_line)
-        for stderr_line in proc.stderr:
-            if stderr_line != '':
-                if print_stderr:
-                    print(stderr_line.decode(), end='', file=sys.stderr)
-                all_stderr.append(stderr_line)
-
-    stdout_text = ''.join([x.decode() for x in all_stdout])
-    stderr_text = ''.join([x.decode() for x in all_stderr])
-    if proc.wait() != 0:
-        raise VerboseCalledProcessError(proc.returncode, cmd, stdout_text, stderr_text)
-
-
-class VerboseCalledProcessError(subprocess.CalledProcessError):
-    def __str__(self):
-        if self.returncode and self.returncode < 0:
-            try:
-                msg = "Command '%s' died with %r." % (
-                    self.cmd, signal.Signals(-self.returncode))
-            except ValueError:
-                msg = "Command '%s' died with unknown signal %d." % (
-                    self.cmd, -self.returncode)
-        else:
-            msg = "Command '%s' returned non-zero exit status %d." % (
-                self.cmd, self.returncode)
-
-        return f'{msg}\n' \
-               f'Stdout:\n' \
-               f'{self.output}\n' \
-               f'Stderr:\n' \
-               f'{self.stderr}'
+    run_cmd(["mri_convert", *extra_args, str(input_path), str(output_path)], dry_run=dry_run)
 
 
 def run_mris_convert(input_path: Path, output_path: Path, dry_run: bool) -> None:
-    # TODO: Can we just use run_mri_convert?
-    cmd = ["mris_convert", str(input_path), str(output_path)]
-    print(" ".join(cmd))
-    if not dry_run:
-        subprocess.run(cmd, check=True)
+    run_cmd(["mris_convert", str(input_path), str(output_path)], dry_run=dry_run)
 
 
 def _surface_to_tkr_transform(t1_path: Path) -> np.ndarray:
@@ -190,7 +138,6 @@ def build_t1_from_nrrd(
     orig_path = mri_dir / "orig.mgz"
     conform_path = mri_dir / "orig_conformed.mgz"
     nu_path = mri_dir / "orig_nu.mgz"  # Intensity correction
-    norm_path = mri_dir / "orig_normed.mgz"  # gradient scalings normalized across subjects
     t1_path = mri_dir / "T1.mgz"
 
     if not orig_path.exists() or overwrite:
@@ -209,17 +156,14 @@ def build_t1_from_nrrd(
         )
 
     if not nu_path.exists() or overwrite:
-        command = "mri_nu_correct.mni --i {} \\\n                   --o {} --n 2"
-        command = command.format(str(conform_path), str(nu_path))
-        print(command)
-        run_command(command)
+        run_cmd(
+            ["mri_nu_correct.mni", "--i", str(conform_path), "--o", str(nu_path), "--n", "2"],
+            dry_run=dry_run,
+        )
 
 
     if not t1_path.exists() or overwrite:    
-        command = "mri_normalize  {} \\\n         {}"
-        command = command.format(str(nu_path), str(t1_path))
-        print(command)
-        run_command(command)
+        run_cmd(["mri_normalize", str(nu_path), str(t1_path)], dry_run=dry_run)
 
     return
 
