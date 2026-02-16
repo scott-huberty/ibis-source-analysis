@@ -46,6 +46,12 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="T1 NRRD file to convert into mri/T1.mgz before surface conversion.",
     )
+    parser.add_argument(
+        "--t2-nrrd",
+        type=Path,
+        default=None,
+        help="Optional T2 NRRD file to convert into mri/T2.mgz.",
+    )
     # Args for finding input surface files
     parser.add_argument(
         "--civet-dir",
@@ -121,31 +127,49 @@ def apply_t1_tkr_alignment(surface_path: Path, t1_path: Path, dry_run: bool) -> 
     write_geometry(str(surface_path), vertices_aligned, faces)
 
 
-def build_t1_from_nrrd(
-    t1_nrrd_path: Path,
+def infer_volume_type(nrrd_path: Path) -> str:
+    name = nrrd_path.name.upper()
+    if "T1" in name:
+        return "T1"
+    if "T2" in name:
+        return "T2"
+    raise ValueError(
+        f"Could not infer volume type from filename: {nrrd_path}. "
+        "Pass volume_type explicitly."
+    )
+
+
+def build_volume_from_nrrd(
+    nrrd_path: Path,
     fs_subject_dir: Path,
-    overwrite: bool=False,
-    dry_run: bool=False,
+    volume_type: str | None = None,
+    overwrite: bool = False,
+    dry_run: bool = False,
 ) -> None:
     mri_dir = Path(fs_subject_dir) / "mri"
-    orig_path = mri_dir / "orig.mgz"
-    conform_path = mri_dir / "orig_conformed.mgz"
-    nu_path = mri_dir / "orig_nu.mgz"  # Intensity correction
-    t1_path = mri_dir / "T1.mgz"
+    if not nrrd_path.exists():
+        raise FileNotFoundError(f"Missing NRRD volume: {nrrd_path}")
+
+    volume_type = infer_volume_type(nrrd_path) if volume_type is None else volume_type.upper()
+    if volume_type not in {"T1", "T2"}:
+        raise ValueError(f"Unsupported volume_type={volume_type}. Use 'T1' or 'T2'.")
+
+    orig_path = mri_dir / f"{volume_type}_orig.mgz"
+    conform_path = mri_dir / f"{volume_type}_orig_conformed.mgz"
+    nu_path = mri_dir / f"{volume_type}_orig_nu.mgz"
+    t_path = mri_dir / f"{volume_type}.mgz"
 
     if not orig_path.exists() or overwrite:
-        if not Path(t1_nrrd_path).exists():
-            raise FileNotFoundError(f"Missing NRRD volume: {t1_nrrd_path}")
-        img = nrrd_to_mgh_image(t1_nrrd_path)
+        img = nrrd_to_mgh_image(nrrd_path)
         orig_path.parent.mkdir(parents=True, exist_ok=True)
         nib.save(img, str(orig_path))
 
-    if not conform_path.exists() or overwrite:    
+    if not conform_path.exists() or overwrite:
         run_mri_convert(
             orig_path,
             conform_path,
             extra_args=["--conform"],
-            dry_run=dry_run
+            dry_run=dry_run,
         )
 
     if not nu_path.exists() or overwrite:
@@ -154,10 +178,8 @@ def build_t1_from_nrrd(
             dry_run=dry_run,
         )
 
-
-    if not t1_path.exists() or overwrite:    
-        run_cmd(["mri_normalize", str(nu_path), str(t1_path)], dry_run=dry_run)
-
+    if not t_path.exists() or overwrite:
+        run_cmd(["mri_normalize", str(nu_path), str(t_path)], dry_run=dry_run)
     return
 
 
@@ -231,12 +253,24 @@ def main() -> int:
     if not args.t1_nrrd.exists():
         print(f"T1 NRRD not found: {args.t1_nrrd}", file=sys.stderr)
         return 1
-    build_t1_from_nrrd(
-        args.t1_nrrd,
+    build_volume_from_nrrd(
+        nrrd_path=args.t1_nrrd,
         fs_subject_dir=fs_subject_dir,
+        volume_type="T1",
         overwrite=args.overwrite,
-        dry_run=args.dry_run
+        dry_run=args.dry_run,
     )
+    if args.t2_nrrd is not None:
+        if not args.t2_nrrd.exists():
+            print(f"T2 NRRD not found: {args.t2_nrrd}", file=sys.stderr)
+            return 1
+        build_volume_from_nrrd(
+            nrrd_path=args.t2_nrrd,
+            fs_subject_dir=fs_subject_dir,
+            volume_type="T2",
+            overwrite=args.overwrite,
+            dry_run=args.dry_run,
+        )
 
     # Convert Surfaces
     mapping: list[tuple[SurfaceSpec, Path, Path]] = []
